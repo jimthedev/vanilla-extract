@@ -43,6 +43,51 @@ interface Options {
   identifiers?: IdentifierOption;
   unstable_pluginFilter?: PluginFilter;
   unstable_mode?: 'transform' | 'emitCss' | 'inlineCssInDev';
+  /**
+   * Custom file extension(s) for vanilla-extract files. When specified, only
+   * files matching this extension will be processed instead of the default `.css.ts`.
+   *
+   * This is useful when consuming pre-compiled vanilla-extract libraries that
+   * publish `.css.js` files - you can use a different extension for your source
+   * files to avoid reprocessing the library files.
+   *
+   * @example
+   * // Process only .ve.ts files
+   * vanillaExtractPlugin({ fileExtension: '.ve' })
+   *
+   * @example
+   * // Process multiple custom extensions
+   * vanillaExtractPlugin({ fileExtension: ['.ve', '.styles'] })
+   */
+  fileExtension?: string | string[];
+}
+
+/**
+ * Creates a RegExp that matches files with the given extension(s) followed by
+ * any of the standard JS/TS file extensions (.js, .cjs, .mjs, .jsx, .ts, .tsx).
+ *
+ * @example
+ * createFileExtensionFilter('.ve') // matches: foo.ve.ts, bar.ve.tsx, etc.
+ * createFileExtensionFilter(['.ve', '.styles']) // matches: foo.ve.ts, bar.styles.tsx, etc.
+ */
+function createFileExtensionFilter(
+  fileExtension: string | string[],
+): RegExp {
+  const extensions = Array.isArray(fileExtension)
+    ? fileExtension
+    : [fileExtension];
+
+  // Escape special regex characters and normalize extensions (ensure leading dot)
+  const escapedExtensions = extensions.map((ext) => {
+    const normalizedExt = ext.startsWith('.') ? ext : `.${ext}`;
+    return normalizedExt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  });
+
+  // Build pattern: \.(ve|styles)\.(js|cjs|mjs|jsx|ts|tsx)(\?used)?$
+  const extensionPattern = escapedExtensions.join('|');
+  return new RegExp(
+    `(${extensionPattern})\\.(js|cjs|mjs|jsx|ts|tsx)(\\?used)?$`,
+  );
 }
 
 // Plugins that we know are compatible with the `vite-node` compiler
@@ -61,7 +106,13 @@ export function vanillaExtractPlugin({
   identifiers,
   unstable_pluginFilter: pluginFilter = defaultPluginFilter,
   unstable_mode = 'emitCss',
+  fileExtension,
 }: Options = {}): Plugin[] {
+  // Create file filter based on fileExtension option or use default
+  const veFileFilter = fileExtension
+    ? createFileExtensionFilter(fileExtension)
+    : cssFileFilter;
+
   let config: ResolvedConfig;
   let configEnv: ConfigEnv;
   let server: ViteDevServer;
@@ -95,7 +146,7 @@ export function vanillaExtractPlugin({
     const seen = new Set<ModuleNode>();
 
     for (const mod of importerChain) {
-      if (mod.id && cssFileFilter.test(mod.id)) {
+      if (mod.id && veFileFilter.test(mod.id)) {
         const virtualModules = moduleGraph.getModulesByFile(
           fileIdToVirtualId(mod.id),
         );
@@ -242,7 +293,7 @@ export function vanillaExtractPlugin({
       async transform(code, id, options) {
         const [validId] = id.split('?');
 
-        if (!cssFileFilter.test(validId)) {
+        if (!veFileFilter.test(validId)) {
           return null;
         }
 
